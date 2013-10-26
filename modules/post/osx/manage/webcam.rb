@@ -43,11 +43,8 @@ class Metasploit3 < Msf::Post
           [true, 'The tmp file to use on the remote machine', '/tmp/.<random>/<random>']
         ),
         OptBool.new('AUDIO_ENABLED', [false, 'Enable audio when recording', true]),
-        OptString.new('AUDIO_COMPRESSION',
-          [true, 'Compression type to use for audio', 'QTCompressionOptionsHighQualityAACAudio']
-        ),
-        OptString.new('VIDEO_COMPRESSION',
-          [true, 'Compression type to use for video', 'QTCompressionOptionsSD480SizeH264Video']
+        OptString.new('PRESET',
+          [true, 'Quality preset to use.', 'AVCaptureSessionPresetHigh']
         ),
         OptEnum.new('SNAP_FILETYPE',
           [true, 'File format to use when saving a snapshot', 'png', %w(jpg png gif tiff bmp)]
@@ -64,9 +61,6 @@ class Metasploit3 < Msf::Post
     num_chunks = (datastore['RECORD_LEN'].to_f/datastore['SYNC_WAIT'].to_f).ceil
     tmp_file = datastore['TMP_FILE'].gsub('<random>') { Rex::Text.rand_text_alpha(10)+'1' }
 
-    # make the tmp directories if necessary
-    # cmd_exec('mkdir', ['-p', File.dirname(tmp_file)])
-
     ruby_code = osx_capture_media(
       :action => action.name.downcase,
       :snap_filetype => datastore['SNAP_FILETYPE'],
@@ -77,8 +71,7 @@ class Metasploit3 < Msf::Post
       :video_device => datastore['CAMERA_INDEX'],
       :audio_device => datastore['MIC_INDEX'],
       :snap_jpg_compression => datastore['JPG_QUALITY'].to_f,
-      :video_compression => datastore['VIDEO_COMPRESSION'],
-      :audio_compression => datastore['AUDIO_COMPRESSION'],
+      :preset => datastore['PRESET'],
       :record_file => tmp_file,
       :snap_file => tmp_file+datastore['SNAP_FILETYPE']
     )
