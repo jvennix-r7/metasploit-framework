@@ -20,7 +20,7 @@ class Metasploit3 < Msf::Post
         victim's machine.  There are three different actions you may choose: ACCOUNTS,
         CHATS, and ALL.  Note that to use the 'CHATS' action, make sure you set the regex
         'PATTERN' option in order to look for certain log names (which consists of a
-        contact's name, and a timestamp). To loot both account  plists and chat logs,
+        contact's name, and a timestamp). To loot both account plists and chat logs,
         simply set the action to 'ALL'.
       },
       'License'       => MSF_LICENSE,
@@ -38,7 +38,7 @@ class Metasploit3 < Msf::Post
 
     register_options(
       [
-        OptRegexp.new('PATTERN', [false, 'Match a keyword in any chat log\'s filename', nil])
+        OptRegexp.new('PATTERN', [false, 'Match a keyword in any chat log\'s filename'])
       ], self.class)
   end
 
@@ -286,8 +286,3 @@ class Metasploit3 < Msf::Post
   end
 
 end
-
-=begin
-Adium:
-/Users/[username]/Library/Application\ Support/Adium\ 2.0/
-=end

