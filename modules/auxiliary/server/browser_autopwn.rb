@@ -826,10 +826,9 @@ class Metasploit3 < Msf::Auxiliary
     js << "#{js_debug("'starting exploits (' + global_exploit_list.length + ' total)<br>'")}\n"
     js << "window.next_exploit(0);\n"
 
-    js = ::Rex::Exploitation::JSObfu.new(js)
-    js.obfuscate unless datastore["DEBUG"]
+    js = js_obfuscate(js) unless datastore["DEBUG"]
 
-    response.body = "#{js}"
+    response.body = js.to_s
     print_status("Responding with #{sploit_cnt} exploits")
     sploits_for_this_client.each do |name|
       vprint_status("* #{name}")
